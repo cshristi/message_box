@@ -32,31 +32,22 @@ export default function AuthForm({ type }) {
     try {
       const res = await axios.post(url, formData);
 
-      console.log("Backend Response:", res.data);
+      if (res.data.token) {
+        localStorage.setItem("token", res.data.token);
 
-      if (type === "login") {
-        if (res.data.token) {
-          localStorage.setItem("token", res.data.token);
+        // ✅ Get values from backend response
+        const username = res.data.user?.name || "User";
+        const email = res.data.user?.email || "";
 
-          const username =
-            res.data.user?.name ||
-            res.data.user?.username ||
-            res.data.name ||
-            res.data.username ||
-            formData.name ||
-            formData.email?.split("@")[0] ||
-            "User";
+        localStorage.setItem("username", username);
+        localStorage.setItem("email", email);
 
-          const email = res.data.user?.email || formData.email || "";
-
-          localStorage.setItem("username", username);
-          localStorage.setItem("email", email);
-
+        if (type === "login") {
           router.push("/homepage");
+        } else {
+          alert("Account created successfully! Please login.");
+          router.push("/login");
         }
-      } else {
-        alert("Account created successfully! Please login.");
-        router.push("/login");
       }
     } catch (err) {
       console.error("Error:", err.response?.data || err.message);

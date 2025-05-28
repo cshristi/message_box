@@ -7,13 +7,23 @@ const ChatApp = () => {
   const [newMessage, setNewMessage] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
+  const [currentUserEmail, setCurrentUserEmail] = useState('');
+  const [currentUserName, setCurrentUserName] = useState('You');
+  const [token, setToken] = useState('');
   const messagesEndRef = useRef(null);
 
-  const currentUserEmail = localStorage.getItem('email');
-  const currentUserName = localStorage.getItem('username') || 'You';
-  const token = localStorage.getItem('token');
+  // Read from localStorage only on client
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setCurrentUserEmail(localStorage.getItem('email') || '');
+      setCurrentUserName(localStorage.getItem('username') || 'You');
+      setToken(localStorage.getItem('token') || '');
+    }
+  }, []);
 
   useEffect(() => {
+    if (!token || !currentUserEmail) return;
+
     const fetchUsers = async () => {
       try {
         const res = await fetch('http://localhost:5000/api/users', {
@@ -30,6 +40,8 @@ const ChatApp = () => {
   }, [token, currentUserEmail]);
 
   useEffect(() => {
+    if (!currentUserEmail) return;
+
     const fetchMessages = async () => {
       try {
         const res = await fetch('http://localhost:5000/api/messages');
@@ -236,15 +248,18 @@ const ChatApp = () => {
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
                 />
-                <button type="submit" className="bg-[#6D4C41] text-white px-4 py-2 rounded-lg">
-                  <Send className="w-4 h-4" />
+                <button
+                  type="submit"
+                  className="bg-[#4E342E] text-white p-2 px-4 rounded-lg hover:bg-[#3E2723] flex items-center"
+                >
+                  <Send className="w-4 h-4 mr-1" />
+                  Send
                 </button>
               </form>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-center text-gray-500 px-6">
-              <h2 className="text-2xl font-semibold mb-2">Welcome!</h2>
-              <p className="text-sm">Select a conversation from the sidebar to start chatting.</p>
+            <div className="flex-1 flex items-center justify-center text-gray-500 text-lg">
+              Select a user to start chatting
             </div>
           )}
         </div>
