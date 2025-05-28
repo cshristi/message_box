@@ -1,8 +1,10 @@
-
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Users, Settings, LogOut, X } from 'lucide-react';
 import io from 'socket.io-client';
+
+// Generate unique message ID (fallback if backend doesn't provide _id)
+const generateMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
 const ChatApp = () => {
   const [messages, setMessages] = useState({});
@@ -10,58 +12,88 @@ const ChatApp = () => {
   const [selectedUser, setSelectedUser] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
   const [currentUserEmail, setCurrentUserEmail] = useState('');
-  const [currentUserName, setCurrentUserName] = useState('You');
+  const [currentUserName, setCurrentUserName] = useState('');
   const [token, setToken] = useState('');
-  const [socket, setSocket] = useState(null);
   const messagesEndRef = useRef(null);
+  const socketRef = useRef(null);
 
-  // Read from localStorage only on client
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setCurrentUserEmail(localStorage.getItem('email') || '');
-      setCurrentUserName(localStorage.getItem('username') || 'You');
-      setToken(localStorage.getItem('token') || '');
+      const storedToken = localStorage.getItem('token') || '';
+      const storedEmail = localStorage.getItem('email') || 'user@example.com';
+      const storedName = localStorage.getItem('username') || 'You';
+      setToken(storedToken);
+      setCurrentUserEmail(storedEmail);
+      setCurrentUserName(storedName);
     }
   }, []);
 
-  // Initialize Socket.IO connection
   useEffect(() => {
-    if (!currentUserEmail || !currentUserName) return;
+    if (!token || !currentUserEmail || !currentUserName) return;
 
-    const newSocket = io('http://localhost:5000');
-    setSocket(newSocket);
+    socketRef.current = io('http://localhost:5000', {
+      auth: { token },
+    });
 
-    // Notify server that user joined
-    newSocket.emit('userJoined', {
+    socketRef.current.on('connect', () => {
+      console.log('Connected to socket server');
+    });
+
+    socketRef.current.emit('userJoined', {
       email: currentUserEmail,
       name: currentUserName,
-      id: newSocket.id
     });
 
-    // Listen for incoming messages
-    newSocket.on('receiveMessage', (messageData) => {
-      const key = [messageData.senderEmail, messageData.receiverEmail].sort().join('-');
-      
-      setMessages((prev) => ({
-        ...prev,
-        [key]: [...(prev[key] || []), {
-          ...messageData,
-          isOwn: messageData.senderEmail === currentUserEmail,
-        }],
-      }));
-    });
-
-    // Listen for user list updates
-    newSocket.on('updateUserList', (users) => {
-      const otherUsers = users.filter(user => user.email !== currentUserEmail);
+    socketRef.current.on('updateUserList', (users) => {
+      const otherUsers = users.filter((user) => user.email !== currentUserEmail);
       setAllUsers(otherUsers);
     });
 
-    // Cleanup on unmount
+    socketRef.current.on('receiveMessage', (messageData) => {
+      const { _id, senderEmail, receiverEmail, content, timestamp } = messageData;
+
+      if (senderEmail === currentUserEmail) return;
+
+      const key = [senderEmail, receiverEmail].sort().join('-');
+
+      setMessages((prev) => {
+        const currentMessages = prev[key] || [];
+        const messageExists = currentMessages.some(
+          (msg) =>
+            (_id && msg._id === _id) ||
+            (msg.senderEmail === senderEmail &&
+              msg.content === content &&
+              Math.abs(new Date(msg.timestamp) - new Date(timestamp)) < 5000)
+        );
+
+        if (messageExists) return prev;
+
+        return {
+          ...prev,
+          [key]: [
+            ...currentMessages,
+            {
+              _id: _id || generateMessageId(),
+              sender: messageData.sender,
+              senderEmail,
+              receiverEmail,
+              content,
+              timestamp, // Use backend-provided timestamp string
+              isOwn: false,
+            },
+          ],
+        };
+      });
+    });
+
+    socketRef.current.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+    });
+
     return () => {
-      newSocket.close();
+      socketRef.current?.disconnect();
     };
-  }, [currentUserEmail, currentUserName]);
+  }, [token, currentUserEmail, currentUserName]);
 
   useEffect(() => {
     if (!token || !currentUserEmail) return;
@@ -71,78 +103,139 @@ const ChatApp = () => {
         const res = await fetch('http://localhost:5000/api/users', {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (!res.ok) throw new Error('Failed to fetch users');
         const data = await res.json();
         const otherUsers = data.filter((user) => user.email !== currentUserEmail);
         setAllUsers(otherUsers);
       } catch (error) {
         console.error('Error fetching users:', error);
+        alert('Failed to load users. Please try again.');
       }
     };
     fetchUsers();
   }, [token, currentUserEmail]);
 
   useEffect(() => {
-    if (!currentUserEmail) return;
+    if (!token || !currentUserEmail) return;
 
     const fetchMessages = async () => {
       try {
-        const res = await fetch('http://localhost:5000/api/messages');
+        const res = await fetch('http://localhost:5000/api/messages', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) throw new Error('Failed to fetch messages');
         const data = await res.json();
         const grouped = {};
-
         data.forEach((msg) => {
+          // Only process private messages (receiverEmail exists)
+          if (!msg.receiverEmail) return;
           const key = [msg.senderEmail, msg.receiverEmail].sort().join('-');
           if (!grouped[key]) grouped[key] = [];
           grouped[key].push({
-            ...msg,
+            _id: msg._id || generateMessageId(),
+            sender: msg.sender,
+            senderEmail: msg.senderEmail,
+            receiverEmail: msg.receiverEmail,
+            content: msg.content,
+            timestamp: msg.timestamp, // Use backend string timestamp
             isOwn: msg.senderEmail === currentUserEmail,
           });
         });
-
         setMessages(grouped);
       } catch (error) {
-        console.error('Failed to fetch messages', error);
+        console.error('Failed to fetch messages:', error);
+        alert('Failed to load messages. Please try again.');
       }
     };
     fetchMessages();
-  }, [currentUserEmail]);
+  }, [token, currentUserEmail]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, selectedUser]);
 
   const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !selectedUser || !socket) return;
+    if (e) e.preventDefault();
+    if (!newMessage.trim() || !selectedUser) return;
 
-    const messageData = {
+    const messageContent = newMessage.trim();
+    const messageId = generateMessageId(); // Fallback ID, backend will override with _id
+
+    const newMsg = {
+      _id: messageId,
       sender: currentUserName,
       senderEmail: currentUserEmail,
       receiverEmail: selectedUser.email,
-      content: newMessage,
+      content: messageContent,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      isOwn: true,
     };
 
-    // Emit message through socket for real-time delivery
-    socket.emit('sendMessage', messageData);
+    setNewMessage('');
 
-    // Also save to database
+    const key = [currentUserEmail, selectedUser.email].sort().join('-');
+    setMessages((prev) => ({
+      ...prev,
+      [key]: [...(prev[key] || []), newMsg],
+    }));
+
     try {
-      await fetch('http://localhost:5000/api/messages', {
+      const response = await fetch('http://localhost:5000/api/messages', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(messageData),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          sender: currentUserName,
+          senderEmail: currentUserEmail,
+          receiverEmail: selectedUser.email,
+          content: messageContent,
+          room: null, // Explicitly set to null for private messages
+        }),
       });
+
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+
+      const savedMessage = await response.json(); // Get saved message with _id
+      socketRef.current?.emit('sendMessage', {
+        _id: savedMessage._id,
+        sender: currentUserName,
+        senderEmail: currentUserEmail,
+        receiverEmail: selectedUser.email,
+        content: messageContent,
+        timestamp: savedMessage.timestamp,
+        room: null,
+      });
+
+      // Update local message with backend _id
+      setMessages((prev) => ({
+        ...prev,
+        [key]: (prev[key] || []).map((msg) =>
+          msg._id === messageId ? { ...msg, _id: savedMessage._id } : msg
+        ),
+      }));
     } catch (error) {
       console.error('Error sending message:', error);
+      setMessages((prev) => ({
+        ...prev,
+        [key]: (prev[key] || []).filter((msg) => msg._id !== messageId),
+      }));
+      alert('Failed to send message. Please try again.');
     }
+  };
 
-    setNewMessage('');
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
   };
 
   const getChatKey = (email) => [currentUserEmail, email].sort().join('-');
   const currentMessages = selectedUser ? messages[getChatKey(selectedUser.email)] || [] : [];
-
   const onlineUsers = allUsers.filter((user) => user.isOnline);
   const offlineUsers = allUsers.filter((user) => !user.isOnline);
 
@@ -163,11 +256,14 @@ const ChatApp = () => {
           <LogOut
             className="w-5 h-5 cursor-pointer hover:text-gray-300"
             onClick={() => {
-              if (socket) {
-                socket.disconnect();
+              if (typeof window !== 'undefined') {
+                localStorage.clear();
               }
-              localStorage.clear();
-              window.location.href = '/login';
+              if (socketRef.current) {
+                socketRef.current.disconnect();
+              }
+             window.location.href = '/login'; // Replace with your actual login page path
+
             }}
           />
         </div>
@@ -180,21 +276,17 @@ const ChatApp = () => {
           <div className="p-4 border-b border-gray-200">
             <h3 className="text-sm font-semibold text-gray-600 mb-3 flex items-center">
               <Users className="w-4 h-4 mr-2" />
-              USERS ({onlineUsers.length + offlineUsers.length})
+              USERS ({allUsers.length})
             </h3>
-
-            {/* Online Users */}
             {onlineUsers.length > 0 && (
               <>
                 <p className="text-xs text-green-700 mb-1">🟢 Online</p>
                 {onlineUsers.map((user) => (
                   <div
-                    key={user._id || user.email}
+                    key={user._id}
                     onClick={() => setSelectedUser(user)}
                     className={`flex items-center p-2 rounded-lg cursor-pointer mb-1 gap-2 ${
-                      selectedUser?.email === user.email
-                        ? 'bg-[#A1887F] text-white'
-                        : 'hover:bg-gray-100'
+                      selectedUser?.email === user.email ? 'bg-[#A1887F] text-white' : 'hover:bg-gray-100'
                     }`}
                   >
                     <div className="w-8 h-8 rounded-full bg-[#A1887F] text-white flex items-center justify-center text-sm font-semibold">
@@ -208,19 +300,15 @@ const ChatApp = () => {
                 ))}
               </>
             )}
-
-            {/* Offline Users */}
             {offlineUsers.length > 0 && (
               <>
                 <p className="text-xs text-gray-500 mt-4 mb-1">⚪ Offline</p>
                 {offlineUsers.map((user) => (
                   <div
-                    key={user._id || user.email}
+                    key={user._id}
                     onClick={() => setSelectedUser(user)}
                     className={`flex items-center p-2 rounded-lg cursor-pointer mb-1 gap-2 ${
-                      selectedUser?.email === user.email
-                        ? 'bg-[#A1887F] text-white'
-                        : 'hover:bg-gray-100'
+                      selectedUser?.email === user.email ? 'bg-[#A1887F] text-white' : 'hover:bg-gray-100'
                     }`}
                   >
                     <div className="w-8 h-8 rounded-full bg-[#BDBDBD] text-white flex items-center justify-center text-sm font-semibold">
@@ -241,7 +329,6 @@ const ChatApp = () => {
         <div className="flex-1 flex flex-col bg-[#FAFAFA] rounded-lg shadow pb-4">
           {selectedUser ? (
             <>
-              {/* Chat Header */}
               <div className="bg-[#F3E2E4] shadow-sm p-4 border-b border-gray-300 rounded-t-lg flex justify-between items-center">
                 <div>
                   <h2 className="text-lg font-semibold text-gray-800">{selectedUser.name}</h2>
@@ -253,50 +340,46 @@ const ChatApp = () => {
                 />
               </div>
 
-              {/* Messages */}
-              <div className="p-4 space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 250px)' }}>
+              <div className="flex-1 p-4 space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 250px)' }}>
                 {currentMessages.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.isOwn ? 'justify-end' : 'justify-start'}`}>
+                  <div
+                    key={msg._id || `${msg.senderEmail}-${msg.timestamp}-${i}`}
+                    className={`flex ${msg.isOwn ? 'justify-end' : 'justify-start'}`}
+                  >
                     <div
-                      className={`p-2 rounded-lg max-w-xs ${
-                        msg.isOwn ? 'bg-[#4E342E] text-white' : 'bg-[#E0E0E0] text-gray-800'
+                      className={`px-4 py-2 rounded-lg text-sm max-w-xs ${
+                        msg.isOwn ? 'bg-[#A1887F] text-white' : 'bg-gray-200 text-black'
                       }`}
                     >
-                      <p className="text-xs font-semibold mb-1">
-                        {msg.isOwn ? currentUserName : selectedUser?.name}
-                      </p>
-                      <p className="text-sm">{msg.content}</p>
-                      <p className="text-xs mt-1 text-right">{msg.timestamp}</p>
+                      <p>{msg.content}</p>
+                      <p className="text-[10px] text-right mt-1">{msg.timestamp}</p>
                     </div>
                   </div>
                 ))}
                 <div ref={messagesEndRef}></div>
               </div>
 
-              {/* Message Input */}
-              <form
-                onSubmit={handleSendMessage}
-                className="flex p-4 pr-6 border-t text-black bg-white rounded-b-lg"
-              >
+              <div className="flex items-center p-4 border-t border-gray-200 bg-white">
                 <input
                   type="text"
-                  placeholder="Type a message..."
-                  className="flex-1 p-2 border border-gray-300 rounded-lg mr-2"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyPress={handleKeyPress}
+                  placeholder="Type a message..."
+                  className="flex-1 px-4 py-2 border border-gray-300   text-black rounded-lg focus:outline-none focus:ring focus:border-blue-300"
                 />
                 <button
-                  type="submit"
-                  className="bg-[#4E342E] text-white p-2 px-4 rounded-lg hover:bg-[#3E2723] flex items-center"
+                  onClick={handleSendMessage}
+                  disabled={!newMessage.trim()}
+                  className="ml-2 p-2 rounded-full bg-[#A1887F] text-white hover:bg-[#8D6E63] disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Send className="w-4 h-4 mr-1" />
-                  Send
+                  <Send className="w-4 h-4" />
                 </button>
-              </form>
+              </div>
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-gray-500 text-lg">
-              Select a user to start chatting
+            <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              <p className="text-lg">Select a user to start chatting</p>
             </div>
           )}
         </div>
