@@ -1,6 +1,8 @@
+
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Users, Settings, LogOut, X } from 'lucide-react';
+import io from 'socket.io-client';
 
 const ChatApp = () => {
   const [messages, setMessages] = useState({});
@@ -10,6 +12,7 @@ const ChatApp = () => {
   const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [currentUserName, setCurrentUserName] = useState('You');
   const [token, setToken] = useState('');
+  const [socket, setSocket] = useState(null);
   const messagesEndRef = useRef(null);
 
   // Read from localStorage only on client
@@ -20,6 +23,45 @@ const ChatApp = () => {
       setToken(localStorage.getItem('token') || '');
     }
   }, []);
+
+  // Initialize Socket.IO connection
+  useEffect(() => {
+    if (!currentUserEmail || !currentUserName) return;
+
+    const newSocket = io('http://localhost:5000');
+    setSocket(newSocket);
+
+    // Notify server that user joined
+    newSocket.emit('userJoined', {
+      email: currentUserEmail,
+      name: currentUserName,
+      id: newSocket.id
+    });
+
+    // Listen for incoming messages
+    newSocket.on('receiveMessage', (messageData) => {
+      const key = [messageData.senderEmail, messageData.receiverEmail].sort().join('-');
+      
+      setMessages((prev) => ({
+        ...prev,
+        [key]: [...(prev[key] || []), {
+          ...messageData,
+          isOwn: messageData.senderEmail === currentUserEmail,
+        }],
+      }));
+    });
+
+    // Listen for user list updates
+    newSocket.on('updateUserList', (users) => {
+      const otherUsers = users.filter(user => user.email !== currentUserEmail);
+      setAllUsers(otherUsers);
+    });
+
+    // Cleanup on unmount
+    return () => {
+      newSocket.close();
+    };
+  }, [currentUserEmail, currentUserName]);
 
   useEffect(() => {
     if (!token || !currentUserEmail) return;
@@ -71,33 +113,25 @@ const ChatApp = () => {
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !selectedUser) return;
+    if (!newMessage.trim() || !selectedUser || !socket) return;
 
-    const newMsg = {
+    const messageData = {
       sender: currentUserName,
       senderEmail: currentUserEmail,
       receiverEmail: selectedUser.email,
       content: newMessage,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isOwn: true,
     };
 
-    const key = [currentUserEmail, selectedUser.email].sort().join('-');
-    setMessages((prev) => ({
-      ...prev,
-      [key]: [...(prev[key] || []), newMsg],
-    }));
+    // Emit message through socket for real-time delivery
+    socket.emit('sendMessage', messageData);
 
+    // Also save to database
     try {
       await fetch('http://localhost:5000/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sender: currentUserName,
-          senderEmail: currentUserEmail,
-          receiverEmail: selectedUser.email,
-          content: newMessage,
-        }),
+        body: JSON.stringify(messageData),
       });
     } catch (error) {
       console.error('Error sending message:', error);
@@ -129,6 +163,9 @@ const ChatApp = () => {
           <LogOut
             className="w-5 h-5 cursor-pointer hover:text-gray-300"
             onClick={() => {
+              if (socket) {
+                socket.disconnect();
+              }
               localStorage.clear();
               window.location.href = '/login';
             }}
@@ -152,7 +189,7 @@ const ChatApp = () => {
                 <p className="text-xs text-green-700 mb-1">🟢 Online</p>
                 {onlineUsers.map((user) => (
                   <div
-                    key={user._id}
+                    key={user._id || user.email}
                     onClick={() => setSelectedUser(user)}
                     className={`flex items-center p-2 rounded-lg cursor-pointer mb-1 gap-2 ${
                       selectedUser?.email === user.email
@@ -178,7 +215,7 @@ const ChatApp = () => {
                 <p className="text-xs text-gray-500 mt-4 mb-1">⚪ Offline</p>
                 {offlineUsers.map((user) => (
                   <div
-                    key={user._id}
+                    key={user._id || user.email}
                     onClick={() => setSelectedUser(user)}
                     className={`flex items-center p-2 rounded-lg cursor-pointer mb-1 gap-2 ${
                       selectedUser?.email === user.email
