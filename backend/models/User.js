@@ -6,6 +6,8 @@ const userSchema = new mongoose.Schema({
   email: { type: String, unique: true },
   password: String,
   isOnline: { type: Boolean, default: false },
+  profilePhoto: { type: String }
+
 });
 
 // Hash password

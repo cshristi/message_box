@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
+import toast from "react-hot-toast";
 
 export default function AuthForm({ type }) {
   const [formData, setFormData] = useState(
@@ -35,24 +36,26 @@ export default function AuthForm({ type }) {
       if (res.data.token) {
         localStorage.setItem("token", res.data.token);
 
-        // ✅ Get values from backend response
         const username = res.data.user?.name || "User";
         const email = res.data.user?.email || "";
 
         localStorage.setItem("username", username);
         localStorage.setItem("email", email);
 
+        toast.success(
+          type === "login" ? "Login successful!" : "Account created successfully!"
+        );
+
         if (type === "login") {
           router.push("/homepage");
         } else {
-          alert("Account created successfully! Please login.");
           router.push("/login");
         }
       }
     } catch (err) {
-      console.error("Error:", err.response?.data || err.message);
       const errorMessage = err.response?.data?.error || "Something went wrong";
       setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
