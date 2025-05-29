@@ -3,6 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, User, Users, Settings, LogOut, X, Check, CheckCheck } from 'lucide-react';
 import io from 'socket.io-client';
 import Link from 'next/link';
+import toast, { Toaster } from 'react-hot-toast'; // Import react-hot-toast
+
 // Generate unique message ID (fallback if backend doesn't provide _id)
 const generateMessageId = () => `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -21,8 +23,7 @@ const ChatApp = () => {
   const typingTimeoutRef = useRef({});
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState({});
-
-const [currentUserProfilePhoto, setCurrentUserProfilePhoto] = useState('');
+  const [currentUserProfilePhoto, setCurrentUserProfilePhoto] = useState('');
 
   // Handle typing events
   const handleTyping = (e) => {
@@ -129,22 +130,23 @@ const [currentUserProfilePhoto, setCurrentUserProfilePhoto] = useState('');
       setIsLoading(false);
     }
   }, []);
-useEffect(() => {
-  const fetchUser = async () => {
-    try {
-      const token = localStorage.getItem("token");
-      const res = await axios.get(`/api/users/${userId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setCurrentUserName(res.data.name);
-      setCurrentUserProfilePhoto(res.data.profilePhoto); // Cloudinary URL
-    } catch (err) {
-      console.error("Failed to load user:", err);
-    }
-  };
 
-  fetchUser();
-}, []);
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const res = await axios.get(`/api/users/${userId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        setCurrentUserName(res.data.name);
+        setCurrentUserProfilePhoto(res.data.profilePhoto); // Cloudinary URL
+      } catch (err) {
+        console.error("Failed to load user:", err);
+      }
+    };
+
+    fetchUser();
+  }, []);
 
   // Socket connection and event handlers
   useEffect(() => {
@@ -169,8 +171,18 @@ useEffect(() => {
     });
 
     socketRef.current.on('receiveMessage', (messageData) => {
-      const { _id, senderEmail, receiverEmail, content, timestamp, readBy } = messageData;
+      const { _id, senderEmail, receiverEmail, content, timestamp, readBy, sender } = messageData;
       if (senderEmail === currentUserEmail) return;
+
+      // Show toast notification for new incoming message
+      toast.success(`${sender || 'Someone'}: ${content}`, {
+        duration: 4000,
+        position: 'top-right',
+        style: {
+          background: '#333',
+          color: '#fff',
+        },
+      });
 
       const key = [senderEmail, receiverEmail].sort().join('-');
       setMessages((prev) => {
@@ -454,6 +466,7 @@ useEffect(() => {
 
   return (
     <div className="h-screen flex flex-col pb-4 bg-[#f2f2f2]">
+      <Toaster /> {/* Add Toaster component for toast notifications */}
       {/* NAVBAR */}
       <div className="flex items-center justify-between px-6 py-4 bg-[#854C52] text-white shadow">
         <div className="flex flex-col">
@@ -461,24 +474,20 @@ useEffect(() => {
           <p className="text-xs text-gray-300">Private Messaging</p>
         </div>
         <div className="flex items-center space-x-4">
-          {/* <div className="flex items-center space-x-2">
-            <User className="w-5 h-5" />
-            <span className="text-sm">{currentUserName}</span>
-          </div> */}
           <Link href="/profilepage">
-  <div className="flex items-center space-x-2 cursor-pointer hover:opacity-80">
-    {currentUserProfilePhoto ? (
-      <img
-        src={currentUserProfilePhoto}
-        alt="Profile"
-        className="w-6 h-6 rounded-full object-cover border"
-      />
-    ) : (
-      <User className="w-5 h-5 text-gray-500" />
-    )}
-    <span className="text-sm">{currentUserName}</span>
-  </div>
-</Link>
+            <div className="flex items-center space-x-2 cursor-pointer hover:opacity-80">
+              {currentUserProfilePhoto ? (
+                <img
+                  src={currentUserProfilePhoto}
+                  alt="Profile"
+                  className="w-6 h-6 rounded-full object-cover border"
+                />
+              ) : (
+                <User className="w-5 h-5 text-gray-500" />
+              )}
+              <span className="text-sm">{currentUserName}</span>
+            </div>
+          </Link>
           <Settings className="w-5 h-5 cursor-pointer hover:text-gray-300" />
           <LogOut
             className="w-5 h-5 cursor-pointer hover:text-gray-300"
